@@ -1,10 +1,15 @@
 # GitHub Migration Validator
 
-A GitHub CLI extension for validating GitHub organization and repository migrations by comparing key metrics between source and target repositories.
+A GitHub CLI extension for validating GitHub organization and repository migrations by comparing key metrics between source and target repositories. Supports GitHub-to-GitHub and Bitbucket Server (Data Center) to GitHub migrations.
 
 ## Overview
 
-The GitHub Migration Validator helps ensure that your migration from one GitHub organization/repository to another has been completed successfully. It compares various repository metrics (issues, pull requests, tags, releases, commits) between source and target repositories and provides a detailed validation report.
+The GitHub Migration Validator helps ensure that your migration to GitHub has been completed successfully. It compares various repository metrics (issues, pull requests, tags, releases, commits) between source and target repositories and provides a detailed validation report.
+
+Supported sources:
+
+- **GitHub** (organization/repository) — full validation including migration archives
+- **Bitbucket Server / Data Center** — API-based validation
 
 ## Documentation
 
@@ -61,20 +66,39 @@ gh migration-validator \
 
 ### Environment Variables
 
-You can use environment variables instead of flags:
+You can use environment variables instead of flags. All environment variables use the `GHMV_` prefix.
+
+#### Source (GitHub-to-GitHub)
 
 ```bash
 export GHMV_SOURCE_ORGANIZATION="source-org"
-export GHMV_TARGET_ORGANIZATION="target-org" 
 export GHMV_SOURCE_TOKEN="ghp_xxx"
-export GHMV_TARGET_TOKEN="ghp_yyy"
 export GHMV_SOURCE_REPO="my-repo"
-export GHMV_TARGET_REPO="my-repo"
-export GHMV_MARKDOWN_TABLE="true"
-export GHMV_MARKDOWN_FILE="validation-report.md"
-export GHMV_NO_LFS="true"  # Optional: skip LFS validation
-export GHMV_STRICT_EXIT="true"  # Optional: exit with status 2 when validations fail
+export GHMV_SOURCE_HOSTNAME="https://github.example.com"  # Optional: GitHub Enterprise Server
+```
 
+#### Target (shared across all subcommands)
+
+```bash
+export GHMV_TARGET_ORGANIZATION="target-org"
+export GHMV_TARGET_TOKEN="ghp_yyy"
+export GHMV_TARGET_REPO="my-repo"
+export GHMV_TARGET_HOSTNAME="https://github.example.com"  # Optional: GitHub Enterprise Server
+```
+
+#### Output & Behavior
+
+```bash
+export GHMV_MARKDOWN_TABLE="true"                  # Output as markdown table
+export GHMV_MARKDOWN_FILE="validation-report.md"   # Write markdown to file
+export GHMV_NO_LFS="true"                          # Skip LFS validation
+export GHMV_STRICT_EXIT="true"                     # Exit code 2 on validation failures
+export GHMV_RATE_LIMIT_THRESHOLD="100"             # GitHub API rate limit warning threshold (default: 50, 0 to disable)
+```
+
+#### Basic Run
+
+```bash
 gh migration-validator
 ```
 
@@ -103,7 +127,7 @@ export GHMV_SOURCE_APP_ID="123456"
 export GHMV_SOURCE_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
 export GHMV_SOURCE_INSTALLATION_ID="987654"
 
-# Target GitHub App  
+# Target GitHub App
 export GHMV_TARGET_APP_ID="123457"
 export GHMV_TARGET_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n..."
 export GHMV_TARGET_INSTALLATION_ID="987655"
@@ -148,7 +172,7 @@ The tool can also download and analyze migration archives to include additional 
 ### Export Options
 
 - `--github-source-org` (required): Source organization name
-- `--source-repo` (required): Source repository name  
+- `--source-repo` (required): Source repository name
 - `--github-source-pat` (required): GitHub token with read permissions
 - `--source-hostname` (optional): GitHub Enterprise Server URL
 - `--format` (optional): Export format - `json` or `csv` (default: `json`)
@@ -173,7 +197,7 @@ The tool can also download and analyze migration archives to include additional 
     "issues": 42,
     "pull_requests": {
       "open": 5,
-      "closed": 10, 
+      "closed": 10,
       "merged": 15,
       "total": 30
     },
@@ -187,7 +211,7 @@ The tool can also download and analyze migration archives to include additional 
   "migration_archive": {
     "issues": 42,
     "pull_requests": 30,
-    "protected_branches" : 1,
+    "protected_branches": 1,
     "releases": 3
   }
 }
@@ -243,6 +267,7 @@ gh migration-validator export \
 - `--markdown-table` (optional): Output results in markdown format
 - `--markdown-file` (optional): Write markdown output to the specified file; uses the same content without the surrounding ```markdown fences
 - `--no-lfs` (optional): Skip LFS object validation
+- `--strict-exit` (optional): Exit with status 2 on validation failures
 
 ### Environment Variables for Validate-from-Export
 
@@ -282,6 +307,75 @@ gh migration-validator validate-from-export --export-file "path/to/export.json"
 
 This ensures you're validating against the exact state of the source repository when the migration occurred, regardless of any subsequent changes.
 
+## Bitbucket Validation
+
+The `bitbucket` subcommand validates migrations from Bitbucket (Server / Data Center) to GitHub by comparing API metrics between the source Bitbucket instance and the target GitHub repository. This is useful for verifying that repository data was migrated correctly when moving from Bitbucket to GitHub.
+
+### Bitbucket Usage
+
+```bash
+gh migration-validator bitbucket \
+  --bbs-server-url "https://bitbucket.example.com" \
+  --bbs-project "PROJ" \
+  --bbs-repo "my-repo" \
+  --bbs-token "your-bbs-token" \
+  --github-target-org "target-org" \
+  --target-repo "my-repo" \
+  --github-target-pat "ghp_yyy"
+```
+
+### Environment Variables for Bitbucket
+
+```bash
+export GHMV_BBS_SERVER_URL="https://bitbucket.example.com"
+export GHMV_BBS_PROJECT="PROJ"
+export GHMV_BBS_REPO="my-repo"
+export GHMV_BBS_TOKEN="your-bbs-token"
+export GHMV_TARGET_ORGANIZATION="target-org"
+export GHMV_TARGET_TOKEN="ghp_yyy"
+export GHMV_TARGET_REPO="my-repo"
+gh migration-validator bitbucket
+```
+
+### Bitbucket Options
+
+#### Bitbucket Source Flags
+
+- `--bbs-server-url` / `-H` (required): Bitbucket Server URL (aligned with [GEI `bbs2gh`](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-from-bitbucket-server-to-github-enterprise-cloud/migrating-repositories-from-bitbucket-server-to-github-enterprise-cloud))
+- `--bbs-project` / `-p` (required): Project key (use `~username` for personal repos)
+- `--bbs-repo` / `-r` (required): Repository slug
+- `--bbs-token` / `-k` (required): Personal access token (or `GHMV_BBS_TOKEN`)
+
+#### Shared Target Flags (inherited from root)
+
+- `--github-target-org` / `-t` (required): Target GitHub organization
+- `--github-target-pat` / `-b` (required): Target GitHub token (or `GHMV_TARGET_TOKEN`)
+- `--target-repo` (required): Target repository name
+- `--target-hostname` / `-v`: GitHub Enterprise Server URL (optional)
+- `--markdown-table` / `-m`: Output results in markdown format
+- `--markdown-file`: Write markdown output to the specified file
+- `--no-lfs`: Skip LFS object validation
+- `--strict-exit`: Exit with status 2 on validation failures
+
+### What Gets Validated (Bitbucket → GitHub)
+
+| Metric                                               | Status      | Notes                                         |
+| ---------------------------------------------------- | ----------- | --------------------------------------------- |
+| Pull Requests (Total, Open, Merged, Declined→Closed) | ✅ Compared | Bitbucket "Declined" maps to GitHub "Closed"  |
+| Tags                                                 | ✅ Compared |                                               |
+| Commits                                              | ✅ Compared | Default branch only                           |
+| Latest Commit SHA                                    | ✅ Compared |                                               |
+| Branch Permissions vs Branch Protection Rules        | ℹ️ Advisory | Different concepts — shown for reference only |
+| Webhooks                                             | ✅ Compared |                                               |
+| Issues                                               | ⏭️ Skipped  | Bitbucket uses Jira, not native issues        |
+| Releases                                             | ⏭️ Skipped  | Bitbucket has no equivalent                   |
+| LFS Objects                                          | ⏭️ Skipped  | TODO                                          |
+
+### Bitbucket Notes
+
+- Requires Bitbucket Server 5.5+ (uses Bearer token PAT authentication)
+- The branch permissions comparison is advisory only (ℹ️ INFO) since Bitbucket branch permissions and GitHub branch protection rules are fundamentally different concepts
+
 ## Migration Archive Support
 
 The tool supports working with GitHub migration archives for enhanced validation capabilities. Migration archives provide three-way validation comparing Source API ↔ Archive ↔ Target API data.
@@ -307,6 +401,7 @@ The tool compares the following metrics between source and target repositories:
 - ✅ **PASS**: Metrics match expected values
 - ❌ **FAIL**: Target is missing data from source
 - ⚠️ **WARN**: Target has more data than source (usually acceptable)
+- ℹ️ **INFO**: Advisory comparison only (e.g., Bitbucket branch permissions vs GitHub branch protection)
 
 ## Output Formats
 
@@ -316,11 +411,13 @@ The tool provides a formatted table with colored status indicators and a summary
 
 Example:
 
-```markdown
-# 🔄 Source vs Target Validation
+```
+📊 Migration Validation Report
 
-Metric                                 | Status  | Source Value                             | Target Value                             | Difference   
-Issues (expected +1 for migration log) | ⚠️ WARN  | 2 (expected target: 3)                   | 7                                        | Extra: 4     
+🔄 Source vs Target Validation
+
+Metric                                 | Status  | Source Value                             | Target Value                             | Difference
+Issues (expected +1 for migration log) | ⚠️ WARN  | 2 (expected target: 3)                   | 7                                        | Extra: 4
 Pull Requests (Total)                  | ✅ PASS | 29                                       | 29                                       | Perfect match
 Pull Requests (Open)                   | ✅ PASS | 0                                        | 0                                        | Perfect match
 Pull Requests (Merged)                 | ✅ PASS | 27                                       | 27                                       | Perfect match
@@ -330,36 +427,27 @@ Commits                                | ✅ PASS | 64                          
 Branch Protection Rules                | ✅ PASS | 1                                        | 1                                        | Perfect match
 Webhooks                               | ✅ PASS | 0                                        | 0                                        | Perfect match
 LFS Objects                            | ✅ PASS | 15                                       | 15                                       | Perfect match
-Latest Commit SHA                      | ✅ PASS | d11552345ad4ffea894b59d9a4145a5119d77dba | d11552345ad4ffea894b59d9a4145a5119d77dba | N/A          
-```
+Latest Commit SHA                      | ✅ PASS | d11552345ad4ffea894b59d9a4145a5119d77dba | d11552345ad4ffea894b59d9a4145a5119d77dba | N/A
 
+📦 Migration Archive vs Source Validation
 
+Metric                           | Status  | Source API Value | Archive Value | Difference
+Archive vs Source Issues         | ❌ FAIL | 2                | 6             | Missing: 4
+Archive vs Source Pull Requests  | ✅ PASS | 29               | 29            | Perfect match
+Archive vs Source Protected Branches | ✅ PASS | 1            | 1             | Perfect match
+Archive vs Source Releases       | ✅ PASS | 25               | 25            | Perfect match
 
-# 📦 Migration Archive vs Source Validation
+🎯 Migration Archive vs Target Validation
 
-Metric                               | Status  | Source API Value | Archive Value | Difference   
-Archive vs Source Issues             | ❌ FAIL | 2                | 6             | Missing: 4   
-Archive vs Source Pull Requests      | ✅ PASS | 29               | 29            | Perfect match
-Archive vs Source Protected Branches | ✅ PASS | 1                | 1             | Perfect match
-Archive vs Source Releases           | ✅ PASS | 25               | 25            | Perfect match
+Metric                                                    | Status  | Archive Value | Target Value | Difference
+Archive vs Target Issues (expected +1 for migration log)  | ✅ PASS | 6 (expected target: 7) | 7     | Perfect match
+Archive vs Target Pull Requests                           | ✅ PASS | 29            | 29           | Perfect match
+Archive vs Target Protected Branches                      | ✅ PASS | 1             | 1            | Perfect match
+Archive vs Target Releases                                | ✅ PASS | 25            | 25           | Perfect match
 
+📊 Passed: 16  📊 Failed: 1  📊 Warnings: 1
 
-
-# 🎯 Migration Archive vs Target Validation
-
-Metric                                                   | Status  | Archive Value          | Target Value | Difference   
-Archive vs Target Issues (expected +1 for migration log) | ✅ PASS | 6 (expected target: 7) | 7            | Perfect match
-Archive vs Target Pull Requests                          | ✅ PASS | 29                     | 29           | Perfect match
-Archive vs Target Protected Branches                     | ✅ PASS | 1                      | 1            | Perfect match
-Archive vs Target Releases                               | ✅ PASS | 25                     | 25           | Perfect match
-
-
-📊 Passed: 16
-📊 Failed: 1
-📊 Warnings: 1
-
-
-ERROR   ❌ Migration validation FAILED - Some data is missing in target
+❌ Migration validation FAILED - Some data is missing in target
 ```
 
 ### Markdown Output
