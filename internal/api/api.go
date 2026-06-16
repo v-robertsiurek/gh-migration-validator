@@ -770,6 +770,54 @@ func (api *GitHubAPI) DownloadMigrationArchive(clientType ClientType, org string
 	return outputPath, nil
 }
 
+// ListOrgRepos retrieves all repository names for an organization using GraphQL pagination.
+func (api *GitHubAPI) ListOrgRepos(clientType ClientType, org string) ([]string, error) {
+	ctx := context.Background()
+
+	client, clientName, err := api.getGraphQLClient(clientType)
+	if err != nil {
+		return nil, err
+	}
+
+	var query struct {
+		Organization struct {
+			Repositories struct {
+				Nodes []struct {
+					Name string
+				}
+				PageInfo struct {
+					HasNextPage bool
+					EndCursor   githubv4.String
+				}
+			} `graphql:"repositories(first: 100, after: $cursor)"`
+		} `graphql:"organization(login: $org)"`
+	}
+
+	variables := map[string]interface{}{
+		"org":    githubv4.String(org),
+		"cursor": (*githubv4.String)(nil),
+	}
+
+	var repos []string
+	for {
+		err := client.Query(ctx, &query, variables)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list %s organization repositories: %v", clientName, err)
+		}
+
+		for _, node := range query.Organization.Repositories.Nodes {
+			repos = append(repos, node.Name)
+		}
+
+		if !query.Organization.Repositories.PageInfo.HasNextPage {
+			break
+		}
+		variables["cursor"] = githubv4.NewString(query.Organization.Repositories.PageInfo.EndCursor)
+	}
+
+	return repos, nil
+}
+
 // Helper function to get client config for a given client type
 func getClientConfigForType(clientType ClientType) ClientConfig {
 	switch clientType {

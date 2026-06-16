@@ -1231,3 +1231,236 @@ func (mv *MigrationValidator) outputMarkdownResults(results []ValidationResult) 
 
 	pterm.Success.Printf("📁 Markdown report saved to %s\n", markdownFile)
 }
+
+// RepoValidationResult holds validation results for a single repository in org-level validation.
+type RepoValidationResult struct {
+	RepoName string
+	Results  []ValidationResult
+	Error    string // Non-empty if the repo validation failed entirely
+}
+
+// OrgValidationSummary holds the overall summary for an organization validation.
+type OrgValidationSummary struct {
+	SourceOrg string
+	TargetOrg string
+	Repos     []RepoValidationResult
+}
+
+// ValidateOrganization validates all repositories in the source org against the target org.
+// It produces a single consolidated report. Repos that fail are recorded with an error
+// but do not stop the rest of the validation.
+func (mv *MigrationValidator) ValidateOrganization(sourceOrg, targetOrg string, repoNames []string) *OrgValidationSummary {
+	summary := &OrgValidationSummary{
+		SourceOrg: sourceOrg,
+		TargetOrg: targetOrg,
+	}
+
+	for i, repoName := range repoNames {
+		pterm.DefaultSection.Printf("[%d/%d] Validating repository: %s\n", i+1, len(repoNames), repoName)
+
+		// Create a fresh validator for each repo to avoid state leaking
+		repoValidator := New(mv.api)
+		results, err := repoValidator.ValidateMigration(sourceOrg, repoName, targetOrg, repoName)
+
+		entry := RepoValidationResult{RepoName: repoName}
+		if err != nil {
+			entry.Error = err.Error()
+			pterm.Error.Printf("  %s: %v\n", repoName, err)
+		} else {
+			entry.Results = results
+		}
+		summary.Repos = append(summary.Repos, entry)
+	}
+
+	return summary
+}
+
+// PrintOrgValidationResults prints a consolidated org-level report.
+func PrintOrgValidationResults(summary *OrgValidationSummary) {
+	pterm.DefaultHeader.WithFullWidth().
+		WithBackgroundStyle(pterm.NewStyle(pterm.BgBlue)).
+		WithTextStyle(pterm.NewStyle(pterm.FgWhite)).
+		Println("📊 Organization Migration Validation Report")
+
+	fmt.Printf("Source org: %s  |  Target org: %s\n", summary.SourceOrg, summary.TargetOrg)
+	fmt.Printf("Repositories validated: %d\n\n", len(summary.Repos))
+
+	// Per-repo summary table
+	tableData := [][]string{{"Repository", "Status", "Pass", "Fail", "Warn"}}
+
+	totalPass, totalFail, totalWarn, totalErrors := 0, 0, 0, 0
+
+	for _, repo := range summary.Repos {
+		if repo.Error != "" {
+			tableData = append(tableData, []string{repo.RepoName, "❌ ERROR", "-", "-", "-"})
+			totalErrors++
+			continue
+		}
+
+		pass, fail, warn := 0, 0, 0
+		for _, r := range repo.Results {
+			switch r.StatusType {
+			case ValidationStatusPass:
+				pass++
+			case ValidationStatusFail:
+				fail++
+			case ValidationStatusWarn:
+				warn++
+			}
+		}
+
+		status := ValidationStatusMessagePass
+		if fail > 0 {
+			status = ValidationStatusMessageFail
+		} else if warn > 0 {
+			status = ValidationStatusMessageWarn
+		}
+
+		tableData = append(tableData, []string{
+			repo.RepoName,
+			status,
+			fmt.Sprintf("%d", pass),
+			fmt.Sprintf("%d", fail),
+			fmt.Sprintf("%d", warn),
+		})
+
+		totalPass += pass
+		totalFail += fail
+		totalWarn += warn
+	}
+
+	pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
+	fmt.Println()
+
+	// Overall summary
+	summaryItems := []pterm.BulletListItem{
+		{Level: 0, Text: fmt.Sprintf("Total checks passed: %d", totalPass), TextStyle: pterm.NewStyle(pterm.FgGreen)},
+		{Level: 0, Text: fmt.Sprintf("Total checks failed: %d", totalFail), TextStyle: pterm.NewStyle(pterm.FgRed)},
+		{Level: 0, Text: fmt.Sprintf("Total warnings: %d", totalWarn), TextStyle: pterm.NewStyle(pterm.FgYellow)},
+	}
+	if totalErrors > 0 {
+		summaryItems = append(summaryItems, pterm.BulletListItem{
+			Level: 0, Text: fmt.Sprintf("Repos with errors: %d", totalErrors), TextStyle: pterm.NewStyle(pterm.FgRed),
+		})
+	}
+	pterm.DefaultBulletList.WithItems(summaryItems).WithBullet("📊").Render()
+	fmt.Println()
+
+	if totalFail > 0 || totalErrors > 0 {
+		pterm.Error.Println("❌ Organization migration validation FAILED")
+	} else if totalWarn > 0 {
+		pterm.Warning.Println("⚠️ Organization migration validation completed with WARNINGS")
+	} else {
+		pterm.Success.Println("✅ Organization migration validation PASSED - All repositories match!")
+	}
+	fmt.Println()
+}
+
+// OrgHasFailures reports whether any repository in the org validation has failures or errors.
+func OrgHasFailures(summary *OrgValidationSummary) bool {
+	for _, repo := range summary.Repos {
+		if repo.Error != "" {
+			return true
+		}
+		if HasFailures(repo.Results) {
+			return true
+		}
+	}
+	return false
+}
+
+// WriteOrgMarkdownReport writes a consolidated markdown report for org-level validation.
+func WriteOrgMarkdownReport(summary *OrgValidationSummary, writer io.Writer) {
+	fmt.Fprintln(writer, "# Organization Migration Validation Report")
+	fmt.Fprintln(writer)
+	fmt.Fprintf(writer, "**Source Organization:** `%s`  \n", summary.SourceOrg)
+	fmt.Fprintf(writer, "**Target Organization:** `%s`  \n", summary.TargetOrg)
+	fmt.Fprintf(writer, "**Repositories validated:** %d  \n\n", len(summary.Repos))
+
+	// Summary table
+	fmt.Fprintln(writer, "## Summary")
+	fmt.Fprintln(writer)
+	fmt.Fprintln(writer, "| Repository | Status | Pass | Fail | Warn |")
+	fmt.Fprintln(writer, "|------------|--------|------|------|------|")
+
+	totalPass, totalFail, totalWarn, totalErrors := 0, 0, 0, 0
+
+	for _, repo := range summary.Repos {
+		if repo.Error != "" {
+			fmt.Fprintf(writer, "| %s | ❌ ERROR | - | - | - |\n", repo.RepoName)
+			totalErrors++
+			continue
+		}
+
+		pass, fail, warn := 0, 0, 0
+		for _, r := range repo.Results {
+			switch r.StatusType {
+			case ValidationStatusPass:
+				pass++
+			case ValidationStatusFail:
+				fail++
+			case ValidationStatusWarn:
+				warn++
+			}
+		}
+
+		status := ValidationStatusMessagePass
+		if fail > 0 {
+			status = ValidationStatusMessageFail
+		} else if warn > 0 {
+			status = ValidationStatusMessageWarn
+		}
+
+		fmt.Fprintf(writer, "| %s | %s | %d | %d | %d |\n", repo.RepoName, status, pass, fail, warn)
+		totalPass += pass
+		totalFail += fail
+		totalWarn += warn
+	}
+
+	fmt.Fprintln(writer)
+	fmt.Fprintf(writer, "**Total:** %d passed, %d failed, %d warnings", totalPass, totalFail, totalWarn)
+	if totalErrors > 0 {
+		fmt.Fprintf(writer, ", %d errors", totalErrors)
+	}
+	fmt.Fprintln(writer)
+	fmt.Fprintln(writer)
+
+	// Per-repo detail sections
+	for _, repo := range summary.Repos {
+		fmt.Fprintf(writer, "---\n\n### %s\n\n", repo.RepoName)
+
+		if repo.Error != "" {
+			fmt.Fprintf(writer, "**Error:** %s\n\n", repo.Error)
+			continue
+		}
+
+		fmt.Fprintln(writer, "| Metric | Status | Source Value | Target Value | Difference |")
+		fmt.Fprintln(writer, "|--------|--------|--------------|--------------|------------|")
+
+		for _, result := range repo.Results {
+			diffStr := ""
+			if result.Difference > 0 {
+				diffStr = fmt.Sprintf("Missing: %d", result.Difference)
+			} else if result.Difference < 0 {
+				diffStr = fmt.Sprintf("Extra: %d", -result.Difference)
+			} else if result.Metric == "Latest Commit SHA" {
+				diffStr = "N/A"
+			} else {
+				diffStr = "Perfect match"
+			}
+
+			fmt.Fprintf(writer, "| %s | %s | %v | %v | %s |\n",
+				result.Metric, result.Status, result.SourceVal, result.TargetVal, diffStr)
+		}
+		fmt.Fprintln(writer)
+	}
+
+	// Final result
+	if totalFail > 0 || totalErrors > 0 {
+		fmt.Fprintln(writer, "**Result:** ❌ Organization migration validation FAILED")
+	} else if totalWarn > 0 {
+		fmt.Fprintln(writer, "**Result:** ⚠️ Organization migration validation completed with WARNINGS")
+	} else {
+		fmt.Fprintln(writer, "**Result:** ✅ Organization migration validation PASSED - All repositories match!")
+	}
+}

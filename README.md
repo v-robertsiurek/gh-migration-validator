@@ -307,6 +307,77 @@ gh migration-validator validate-from-export --export-file "path/to/export.json"
 
 This ensures you're validating against the exact state of the source repository when the migration occurred, regardless of any subsequent changes.
 
+## Validate Organization
+
+The `validate-org` command validates **all repositories** in a source organization against a target organization in a single run, producing one consolidated report instead of running validation per repository.
+
+### Validate-Org Usage
+
+```bash
+gh migration-validator validate-org \
+  --github-source-org "source-org" \
+  --github-target-org "target-org" \
+  --github-source-pat "ghp_xxx" \
+  --github-target-pat "ghp_yyy"
+```
+
+### With Markdown Report
+
+```bash
+gh migration-validator validate-org \
+  --github-source-org "source-org" \
+  --github-target-org "target-org" \
+  --github-source-pat "ghp_xxx" \
+  --github-target-pat "ghp_yyy" \
+  --markdown-table \
+  --markdown-file "org-validation-report.md"
+```
+
+### Environment Variables for Validate-Org
+
+```bash
+export GHMV_SOURCE_ORGANIZATION="source-org"
+export GHMV_SOURCE_TOKEN="ghp_xxx"
+export GHMV_TARGET_ORGANIZATION="target-org"
+export GHMV_TARGET_TOKEN="ghp_yyy"
+
+gh migration-validator validate-org
+```
+
+### Validate-Org Options
+
+#### Source Flags
+
+- `--github-source-org` / `-s` (required): Source GitHub organization
+- `--github-source-pat` / `-a` (required): Source GitHub token with read permissions
+- `--source-hostname` / `-u` (optional): GitHub Enterprise Server URL for source
+
+#### Shared Target Flags (inherited from root)
+
+- `--github-target-org` / `-t` (required): Target GitHub organization
+- `--github-target-pat` / `-b` (required): Target GitHub token with read permissions
+- `--target-hostname` / `-v` (optional): GitHub Enterprise Server URL for target
+- `--markdown-table` / `-m`: Output results in markdown format
+- `--markdown-file`: Write consolidated markdown report to a file
+- `--no-lfs`: Skip LFS object validation
+- `--strict-exit`: Exit with status 2 on validation failures
+
+### How It Works
+
+1. Lists all repositories in the source organization
+2. For each repository, validates it against the same-named repository in the target organization
+3. Repositories that fail or cannot be accessed are recorded with an error but do not stop validation of remaining repositories
+4. Produces a **single summary table** with per-repository pass/fail/warn status
+5. Optionally writes one consolidated markdown report with details for every repository
+
+### Output
+
+The consolidated report includes:
+
+- A summary table with each repository's overall status (pass/fail/warn)
+- Total counts across all repositories
+- Per-repository detailed validation results (in the markdown report)
+
 ## Bitbucket Validation
 
 The `bitbucket` subcommand validates migrations from Bitbucket (Server / Data Center) to GitHub by comparing API metrics between the source Bitbucket instance and the target GitHub repository. This is useful for verifying that repository data was migrated correctly when moving from Bitbucket to GitHub.
