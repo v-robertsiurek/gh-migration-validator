@@ -1053,3 +1053,180 @@ func TestValidateRepositoryData_NoLFSFlag(t *testing.T) {
 			"Metric at position %d should be %s", i, expectedMetric)
 	}
 }
+
+func TestOrgHasFailures_NoFailures(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "source-org",
+		TargetOrg: "target-org",
+		Repos: []RepoValidationResult{
+			{
+				RepoName: "repo-a",
+				Results: []ValidationResult{
+					{Metric: "Issues", StatusType: ValidationStatusPass},
+					{Metric: "Tags", StatusType: ValidationStatusPass},
+				},
+			},
+			{
+				RepoName: "repo-b",
+				Results: []ValidationResult{
+					{Metric: "Issues", StatusType: ValidationStatusWarn},
+				},
+			},
+		},
+	}
+
+	assert.False(t, OrgHasFailures(summary), "Should report no failures when all repos pass or warn")
+}
+
+func TestOrgHasFailures_WithFailedValidation(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "source-org",
+		TargetOrg: "target-org",
+		Repos: []RepoValidationResult{
+			{
+				RepoName: "repo-a",
+				Results: []ValidationResult{
+					{Metric: "Issues", StatusType: ValidationStatusPass},
+				},
+			},
+			{
+				RepoName: "repo-b",
+				Results: []ValidationResult{
+					{Metric: "Issues", StatusType: ValidationStatusFail},
+				},
+			},
+		},
+	}
+
+	assert.True(t, OrgHasFailures(summary), "Should report failures when a repo has failed validations")
+}
+
+func TestOrgHasFailures_WithRepoError(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "source-org",
+		TargetOrg: "target-org",
+		Repos: []RepoValidationResult{
+			{
+				RepoName: "repo-a",
+				Results: []ValidationResult{
+					{Metric: "Issues", StatusType: ValidationStatusPass},
+				},
+			},
+			{
+				RepoName: "repo-b",
+				Error:    "cannot access repository",
+			},
+		},
+	}
+
+	assert.True(t, OrgHasFailures(summary), "Should report failures when a repo has an error")
+}
+
+func TestOrgHasFailures_EmptyRepos(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "source-org",
+		TargetOrg: "target-org",
+		Repos:     []RepoValidationResult{},
+	}
+
+	assert.False(t, OrgHasFailures(summary), "Should report no failures for empty repo list")
+}
+
+func TestWriteOrgMarkdownReport(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "source-org",
+		TargetOrg: "target-org",
+		Repos: []RepoValidationResult{
+			{
+				RepoName: "repo-a",
+				Results: []ValidationResult{
+					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 10, TargetVal: 11, Difference: 0},
+					{Metric: "Tags", Status: ValidationStatusMessageFail, StatusType: ValidationStatusFail, SourceVal: 5, TargetVal: 3, Difference: 2},
+				},
+			},
+			{
+				RepoName: "repo-b",
+				Error:    "cannot access repository",
+			},
+			{
+				RepoName: "repo-c",
+				Results: []ValidationResult{
+					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 2, Difference: 0},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	WriteOrgMarkdownReport(summary, &buf)
+	output := buf.String()
+
+	// Header
+	assert.Contains(t, output, "# Organization Migration Validation Report")
+	assert.Contains(t, output, "`source-org`")
+	assert.Contains(t, output, "`target-org`")
+	assert.Contains(t, output, "Repositories validated:** 3")
+
+	// Summary table
+	assert.Contains(t, output, "| repo-a |")
+	assert.Contains(t, output, "| repo-b | ❌ ERROR")
+	assert.Contains(t, output, "| repo-c |")
+
+	// Per-repo details
+	assert.Contains(t, output, "### repo-a")
+	assert.Contains(t, output, "### repo-b")
+	assert.Contains(t, output, "cannot access repository")
+	assert.Contains(t, output, "### repo-c")
+
+	// Detail table content
+	assert.Contains(t, output, "Missing: 2")
+
+	// Final result
+	assert.Contains(t, output, "FAILED")
+}
+
+func TestWriteOrgMarkdownReport_AllPass(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "src",
+		TargetOrg: "tgt",
+		Repos: []RepoValidationResult{
+			{
+				RepoName: "repo-a",
+				Results: []ValidationResult{
+					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 1, Difference: 0},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	WriteOrgMarkdownReport(summary, &buf)
+
+	assert.Contains(t, buf.String(), "PASSED")
+	assert.NotContains(t, buf.String(), "FAILED")
+}
+
+func TestPrintOrgValidationResults_NoPanic(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "source-org",
+		TargetOrg: "target-org",
+		Repos: []RepoValidationResult{
+			{
+				RepoName: "repo-a",
+				Results: []ValidationResult{
+					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 1},
+				},
+			},
+			{
+				RepoName: "repo-b",
+				Error:    "access denied",
+			},
+		},
+	}
+
+	assert.NotPanics(t, func() {
+		captureOutput(func() {
+			PrintOrgValidationResults(summary)
+		})
+	}, "PrintOrgValidationResults should not panic")
+}
