@@ -1293,6 +1293,18 @@ func TestParseRepoListCSV_FileNotFound(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestParseRepoListCSV_RepoNameContainsSourceTarget(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "repos.csv")
+	content := "source_repo,target_repo\nmy-source-app,my-target-app\n"
+	os.WriteFile(tmpFile, []byte(content), 0o644)
+
+	mappings, err := ParseRepoListCSV(tmpFile)
+	assert.NoError(t, err)
+	assert.Len(t, mappings, 1)
+	assert.Equal(t, "my-source-app", mappings[0].SourceRepo)
+	assert.Equal(t, "my-target-app", mappings[0].TargetRepo)
+}
+
 func TestOrgRepoLabel_SameName(t *testing.T) {
 	repo := RepoValidationResult{SourceRepoName: "my-repo", TargetRepoName: "my-repo"}
 	assert.Equal(t, "my-repo", orgRepoLabel(repo))

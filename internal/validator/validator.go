@@ -1241,7 +1241,7 @@ func (mv *MigrationValidator) outputMarkdownResults(results []ValidationResult) 
 type RepoMapping struct {
 	SourceRepo string
 	TargetRepo string
-	IsFork     bool
+	IsFork     *bool // nil = unknown (will query API), non-nil = known from ListOrgRepos
 }
 
 // RepoValidationResult holds validation results for a single repository in org-level validation.
@@ -1282,8 +1282,10 @@ func (mv *MigrationValidator) ValidateOrganization(sourceOrg, targetOrg string, 
 		repoValidator := New(mv.api)
 
 		// Detect if source repo is a fork (from ListOrgRepos or API check)
-		isFork := mapping.IsFork
-		if !isFork && mv.api != nil {
+		isFork := false
+		if mapping.IsFork != nil {
+			isFork = *mapping.IsFork
+		} else if mv.api != nil {
 			if detected, err := mv.api.IsRepoFork(api.SourceClient, sourceOrg, mapping.SourceRepo); err == nil {
 				isFork = detected
 			}
@@ -1450,14 +1452,13 @@ func ParseRepoListCSV(filePath string) ([]RepoMapping, error) {
 			continue
 		}
 
-		// Skip header row (first non-empty, non-comment line that looks like a header)
+		// Skip header row: must exactly match known header patterns
 		if !headerSkipped {
+			headerSkipped = true
 			lower := strings.ToLower(line)
-			if strings.Contains(lower, "source") && strings.Contains(lower, "target") {
-				headerSkipped = true
+			if lower == "source_repo,target_repo" || lower == "source,target" {
 				continue
 			}
-			headerSkipped = true
 		}
 
 		parts := strings.SplitN(line, ",", 2)

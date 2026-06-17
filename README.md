@@ -346,7 +346,7 @@ gh migration-validator validate-org \
   --repo-list repos.csv
 ```
 
-If a CSV line has only one column, the target name is assumed to match the source. Lines starting with `#` are comments. A header row containing both "source" and "target" is automatically skipped.
+If a CSV line has only one column, the target name is assumed to match the source. Lines starting with `#` are comments. A header row of `source_repo,target_repo` or `source,target` is automatically skipped.
 
 ### With Markdown Report
 

@@ -84,7 +84,8 @@ error but do not stop validation of the remaining repositories.`,
 
 			// Default mapping: same name source → target, preserving fork info
 			for _, repo := range repos {
-				mappings = append(mappings, validator.RepoMapping{SourceRepo: repo.Name, TargetRepo: repo.Name, IsFork: repo.IsFork})
+				isFork := repo.IsFork
+				mappings = append(mappings, validator.RepoMapping{SourceRepo: repo.Name, TargetRepo: repo.Name, IsFork: &isFork})
 			}
 		}
 
