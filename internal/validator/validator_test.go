@@ -1060,14 +1060,16 @@ func TestOrgHasFailures_NoFailures(t *testing.T) {
 		TargetOrg: "target-org",
 		Repos: []RepoValidationResult{
 			{
-				RepoName: "repo-a",
+				SourceRepoName: "repo-a",
+				TargetRepoName: "repo-a",
 				Results: []ValidationResult{
 					{Metric: "Issues", StatusType: ValidationStatusPass},
 					{Metric: "Tags", StatusType: ValidationStatusPass},
 				},
 			},
 			{
-				RepoName: "repo-b",
+				SourceRepoName: "repo-b",
+				TargetRepoName: "repo-b",
 				Results: []ValidationResult{
 					{Metric: "Issues", StatusType: ValidationStatusWarn},
 				},
@@ -1084,13 +1086,15 @@ func TestOrgHasFailures_WithFailedValidation(t *testing.T) {
 		TargetOrg: "target-org",
 		Repos: []RepoValidationResult{
 			{
-				RepoName: "repo-a",
+				SourceRepoName: "repo-a",
+				TargetRepoName: "repo-a",
 				Results: []ValidationResult{
 					{Metric: "Issues", StatusType: ValidationStatusPass},
 				},
 			},
 			{
-				RepoName: "repo-b",
+				SourceRepoName: "repo-b",
+				TargetRepoName: "repo-b",
 				Results: []ValidationResult{
 					{Metric: "Issues", StatusType: ValidationStatusFail},
 				},
@@ -1107,14 +1111,16 @@ func TestOrgHasFailures_WithRepoError(t *testing.T) {
 		TargetOrg: "target-org",
 		Repos: []RepoValidationResult{
 			{
-				RepoName: "repo-a",
+				SourceRepoName: "repo-a",
+				TargetRepoName: "repo-a",
 				Results: []ValidationResult{
 					{Metric: "Issues", StatusType: ValidationStatusPass},
 				},
 			},
 			{
-				RepoName: "repo-b",
-				Error:    "cannot access repository",
+				SourceRepoName: "repo-b",
+				TargetRepoName: "repo-b",
+				Error:          "cannot access repository",
 			},
 		},
 	}
@@ -1138,18 +1144,21 @@ func TestWriteOrgMarkdownReport(t *testing.T) {
 		TargetOrg: "target-org",
 		Repos: []RepoValidationResult{
 			{
-				RepoName: "repo-a",
+				SourceRepoName: "repo-a",
+				TargetRepoName: "repo-a",
 				Results: []ValidationResult{
 					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 10, TargetVal: 11, Difference: 0},
 					{Metric: "Tags", Status: ValidationStatusMessageFail, StatusType: ValidationStatusFail, SourceVal: 5, TargetVal: 3, Difference: 2},
 				},
 			},
 			{
-				RepoName: "repo-b",
-				Error:    "cannot access repository",
+				SourceRepoName: "repo-b",
+				TargetRepoName: "repo-b",
+				Error:          "cannot access repository",
 			},
 			{
-				RepoName: "repo-c",
+				SourceRepoName: "repo-c",
+				TargetRepoName: "repo-c",
 				Results: []ValidationResult{
 					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 2, Difference: 0},
 				},
@@ -1191,7 +1200,8 @@ func TestWriteOrgMarkdownReport_AllPass(t *testing.T) {
 		TargetOrg: "tgt",
 		Repos: []RepoValidationResult{
 			{
-				RepoName: "repo-a",
+				SourceRepoName: "repo-a",
+				TargetRepoName: "repo-a",
 				Results: []ValidationResult{
 					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 1, Difference: 0},
 				},
@@ -1212,14 +1222,16 @@ func TestPrintOrgValidationResults_NoPanic(t *testing.T) {
 		TargetOrg: "target-org",
 		Repos: []RepoValidationResult{
 			{
-				RepoName: "repo-a",
+				SourceRepoName: "repo-a",
+				TargetRepoName: "repo-a",
 				Results: []ValidationResult{
 					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 1},
 				},
 			},
 			{
-				RepoName: "repo-b",
-				Error:    "access denied",
+				SourceRepoName: "repo-b",
+				TargetRepoName: "repo-b",
+				Error:          "access denied",
 			},
 		},
 	}
@@ -1229,4 +1241,110 @@ func TestPrintOrgValidationResults_NoPanic(t *testing.T) {
 			PrintOrgValidationResults(summary)
 		})
 	}, "PrintOrgValidationResults should not panic")
+}
+
+func TestParseRepoListCSV_BasicMapping(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "repos.csv")
+	content := "source_repo,target_repo\nmy-app,my-app-migrated\nshared-lib,shared-lib\n"
+	os.WriteFile(tmpFile, []byte(content), 0o644)
+
+	mappings, err := ParseRepoListCSV(tmpFile)
+	assert.NoError(t, err)
+	assert.Len(t, mappings, 2)
+	assert.Equal(t, "my-app", mappings[0].SourceRepo)
+	assert.Equal(t, "my-app-migrated", mappings[0].TargetRepo)
+	assert.Equal(t, "shared-lib", mappings[1].SourceRepo)
+	assert.Equal(t, "shared-lib", mappings[1].TargetRepo)
+}
+
+func TestParseRepoListCSV_SingleColumn(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "repos.csv")
+	content := "repo-a\nrepo-b\n"
+	os.WriteFile(tmpFile, []byte(content), 0o644)
+
+	mappings, err := ParseRepoListCSV(tmpFile)
+	assert.NoError(t, err)
+	assert.Len(t, mappings, 2)
+	assert.Equal(t, "repo-a", mappings[0].SourceRepo)
+	assert.Equal(t, "repo-a", mappings[0].TargetRepo)
+}
+
+func TestParseRepoListCSV_CommentsAndEmpty(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "repos.csv")
+	content := "# This is a comment\nsource_repo,target_repo\n\nmy-app,my-app\n# another comment\nlib,lib\n"
+	os.WriteFile(tmpFile, []byte(content), 0o644)
+
+	mappings, err := ParseRepoListCSV(tmpFile)
+	assert.NoError(t, err)
+	assert.Len(t, mappings, 2)
+}
+
+func TestParseRepoListCSV_EmptyFile(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "repos.csv")
+	os.WriteFile(tmpFile, []byte(""), 0o644)
+
+	_, err := ParseRepoListCSV(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no repository mappings found")
+}
+
+func TestParseRepoListCSV_FileNotFound(t *testing.T) {
+	_, err := ParseRepoListCSV("/nonexistent/file.csv")
+	assert.Error(t, err)
+}
+
+func TestOrgRepoLabel_SameName(t *testing.T) {
+	repo := RepoValidationResult{SourceRepoName: "my-repo", TargetRepoName: "my-repo"}
+	assert.Equal(t, "my-repo", orgRepoLabel(repo))
+}
+
+func TestOrgRepoLabel_DifferentNames(t *testing.T) {
+	repo := RepoValidationResult{SourceRepoName: "old-name", TargetRepoName: "new-name"}
+	assert.Equal(t, "old-name → new-name", orgRepoLabel(repo))
+}
+
+func TestWriteOrgMarkdownReport_WithInfoStatus(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "src",
+		TargetOrg: "tgt",
+		Repos: []RepoValidationResult{
+			{
+				SourceRepoName: "repo-a",
+				TargetRepoName: "repo-a",
+				Results: []ValidationResult{
+					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 1, Difference: 0},
+					{Metric: "Branch Protection (advisory)", Status: ValidationStatusMessageInfo, StatusType: ValidationStatusInfo, SourceVal: 2, TargetVal: 1, Difference: 1},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	WriteOrgMarkdownReport(summary, &buf)
+	output := buf.String()
+
+	assert.Contains(t, output, "Info")
+	assert.Contains(t, output, "1 info")
+}
+
+func TestWriteOrgMarkdownReport_RepoMapping(t *testing.T) {
+	summary := &OrgValidationSummary{
+		SourceOrg: "src",
+		TargetOrg: "tgt",
+		Repos: []RepoValidationResult{
+			{
+				SourceRepoName: "old-name",
+				TargetRepoName: "new-name",
+				Results: []ValidationResult{
+					{Metric: "Issues", Status: ValidationStatusMessagePass, StatusType: ValidationStatusPass, SourceVal: 1, TargetVal: 1, Difference: 0},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	WriteOrgMarkdownReport(summary, &buf)
+	output := buf.String()
+
+	assert.Contains(t, output, "old-name → new-name")
 }

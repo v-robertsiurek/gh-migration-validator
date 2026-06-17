@@ -117,8 +117,13 @@ func New(githubAPI *api.GitHubAPI) *MigrationValidator {
 	}
 }
 
-// ValidateMigration performs the migration validation logic and returns results
-func (mv *MigrationValidator) ValidateMigration(sourceOwner, sourceRepo, targetOwner, targetRepo string) ([]ValidationResult, error) {
+// ValidateMigration performs the migration validation logic and returns results.
+// An optional ValidationOptions can be passed to control which checks are performed.
+func (mv *MigrationValidator) ValidateMigration(sourceOwner, sourceRepo, targetOwner, targetRepo string, opts ...ValidationOptions) ([]ValidationResult, error) {
+	opt := ValidationOptions{}
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	// Validate access to both repositories before starting expensive operations
 	fmt.Println("Validating repository access...")
 	if err := mv.api.ValidateRepoAccess(api.SourceClient, sourceOwner, sourceRepo); err != nil {
@@ -184,7 +189,7 @@ func (mv *MigrationValidator) ValidateMigration(sourceOwner, sourceRepo, targetO
 
 	// Compare and validate the data
 	fmt.Println("\nValidating migration data...")
-	results := mv.validateRepositoryData(ValidationOptions{})
+	results := mv.validateRepositoryData(opt)
 
 	fmt.Println("Migration validation completed!")
 	return results, nil
@@ -1232,11 +1237,19 @@ func (mv *MigrationValidator) outputMarkdownResults(results []ValidationResult) 
 	pterm.Success.Printf("📁 Markdown report saved to %s\n", markdownFile)
 }
 
+// RepoMapping represents a source-to-target repository name pair.
+type RepoMapping struct {
+	SourceRepo string
+	TargetRepo string
+	IsFork     bool
+}
+
 // RepoValidationResult holds validation results for a single repository in org-level validation.
 type RepoValidationResult struct {
-	RepoName string
-	Results  []ValidationResult
-	Error    string // Non-empty if the repo validation failed entirely
+	SourceRepoName string
+	TargetRepoName string
+	Results        []ValidationResult
+	Error          string // Non-empty if the repo validation failed entirely
 }
 
 // OrgValidationSummary holds the overall summary for an organization validation.
@@ -1246,30 +1259,59 @@ type OrgValidationSummary struct {
 	Repos     []RepoValidationResult
 }
 
-// ValidateOrganization validates all repositories in the source org against the target org.
-// It produces a single consolidated report. Repos that fail are recorded with an error
-// but do not stop the rest of the validation.
-func (mv *MigrationValidator) ValidateOrganization(sourceOrg, targetOrg string, repoNames []string) *OrgValidationSummary {
+// ValidateOrganization validates repositories from the source org against the target org
+// using the provided repo mappings. Each mapping specifies a source and target repo name,
+// allowing different names between source and target. Repos that fail are recorded with
+// an error but do not stop the rest of the validation.
+// The optional onResult callback is invoked after each repo completes, enabling incremental
+// output (e.g. writing partial results to disk so progress survives Ctrl+C).
+func (mv *MigrationValidator) ValidateOrganization(sourceOrg, targetOrg string, mappings []RepoMapping, onResult func(*OrgValidationSummary)) *OrgValidationSummary {
 	summary := &OrgValidationSummary{
 		SourceOrg: sourceOrg,
 		TargetOrg: targetOrg,
 	}
 
-	for i, repoName := range repoNames {
-		pterm.DefaultSection.Printf("[%d/%d] Validating repository: %s\n", i+1, len(repoNames), repoName)
+	for i, mapping := range mappings {
+		label := mapping.SourceRepo
+		if mapping.SourceRepo != mapping.TargetRepo {
+			label = fmt.Sprintf("%s → %s", mapping.SourceRepo, mapping.TargetRepo)
+		}
+		pterm.DefaultSection.Printf("[%d/%d] Validating repository: %s\n", i+1, len(mappings), label)
 
 		// Create a fresh validator for each repo to avoid state leaking
 		repoValidator := New(mv.api)
-		results, err := repoValidator.ValidateMigration(sourceOrg, repoName, targetOrg, repoName)
 
-		entry := RepoValidationResult{RepoName: repoName}
+		// Detect if source repo is a fork (from ListOrgRepos or API check)
+		isFork := mapping.IsFork
+		if !isFork && mv.api != nil {
+			if detected, err := mv.api.IsRepoFork(api.SourceClient, sourceOrg, mapping.SourceRepo); err == nil {
+				isFork = detected
+			}
+		}
+
+		// Forked repos have issues disabled, skip issue validation for them
+		var opts ValidationOptions
+		if isFork {
+			opts.SkipIssues = true
+		}
+
+		results, err := repoValidator.ValidateMigration(sourceOrg, mapping.SourceRepo, targetOrg, mapping.TargetRepo, opts)
+
+		entry := RepoValidationResult{
+			SourceRepoName: mapping.SourceRepo,
+			TargetRepoName: mapping.TargetRepo,
+		}
 		if err != nil {
 			entry.Error = err.Error()
-			pterm.Error.Printf("  %s: %v\n", repoName, err)
+			pterm.Error.Printf("  %s: %v\n", label, err)
 		} else {
 			entry.Results = results
 		}
 		summary.Repos = append(summary.Repos, entry)
+
+		if onResult != nil {
+			onResult(summary)
+		}
 	}
 
 	return summary
@@ -1286,18 +1328,19 @@ func PrintOrgValidationResults(summary *OrgValidationSummary) {
 	fmt.Printf("Repositories validated: %d\n\n", len(summary.Repos))
 
 	// Per-repo summary table
-	tableData := [][]string{{"Repository", "Status", "Pass", "Fail", "Warn"}}
+	tableData := [][]string{{"Repository", "Status", "Pass", "Fail", "Warn", "Info"}}
 
-	totalPass, totalFail, totalWarn, totalErrors := 0, 0, 0, 0
+	totalPass, totalFail, totalWarn, totalInfo, totalErrors := 0, 0, 0, 0, 0
 
 	for _, repo := range summary.Repos {
+		repoLabel := orgRepoLabel(repo)
 		if repo.Error != "" {
-			tableData = append(tableData, []string{repo.RepoName, "❌ ERROR", "-", "-", "-"})
+			tableData = append(tableData, []string{repoLabel, "❌ ERROR", "-", "-", "-", "-"})
 			totalErrors++
 			continue
 		}
 
-		pass, fail, warn := 0, 0, 0
+		pass, fail, warn, info := 0, 0, 0, 0
 		for _, r := range repo.Results {
 			switch r.StatusType {
 			case ValidationStatusPass:
@@ -1306,6 +1349,8 @@ func PrintOrgValidationResults(summary *OrgValidationSummary) {
 				fail++
 			case ValidationStatusWarn:
 				warn++
+			case ValidationStatusInfo:
+				info++
 			}
 		}
 
@@ -1317,16 +1362,18 @@ func PrintOrgValidationResults(summary *OrgValidationSummary) {
 		}
 
 		tableData = append(tableData, []string{
-			repo.RepoName,
+			repoLabel,
 			status,
 			fmt.Sprintf("%d", pass),
 			fmt.Sprintf("%d", fail),
 			fmt.Sprintf("%d", warn),
+			fmt.Sprintf("%d", info),
 		})
 
 		totalPass += pass
 		totalFail += fail
 		totalWarn += warn
+		totalInfo += info
 	}
 
 	pterm.DefaultTable.WithHasHeader().WithData(tableData).Render()
@@ -1337,6 +1384,11 @@ func PrintOrgValidationResults(summary *OrgValidationSummary) {
 		{Level: 0, Text: fmt.Sprintf("Total checks passed: %d", totalPass), TextStyle: pterm.NewStyle(pterm.FgGreen)},
 		{Level: 0, Text: fmt.Sprintf("Total checks failed: %d", totalFail), TextStyle: pterm.NewStyle(pterm.FgRed)},
 		{Level: 0, Text: fmt.Sprintf("Total warnings: %d", totalWarn), TextStyle: pterm.NewStyle(pterm.FgYellow)},
+	}
+	if totalInfo > 0 {
+		summaryItems = append(summaryItems, pterm.BulletListItem{
+			Level: 0, Text: fmt.Sprintf("Total info: %d", totalInfo), TextStyle: pterm.NewStyle(pterm.FgCyan),
+		})
 	}
 	if totalErrors > 0 {
 		summaryItems = append(summaryItems, pterm.BulletListItem{
@@ -1369,6 +1421,69 @@ func OrgHasFailures(summary *OrgValidationSummary) bool {
 	return false
 }
 
+// orgRepoLabel returns a display label for a repo in org validation.
+// Shows "source → target" when names differ, otherwise just the repo name.
+func orgRepoLabel(repo RepoValidationResult) string {
+	if repo.SourceRepoName != repo.TargetRepoName {
+		return fmt.Sprintf("%s → %s", repo.SourceRepoName, repo.TargetRepoName)
+	}
+	return repo.SourceRepoName
+}
+
+// ParseRepoListCSV parses a CSV file with source,target repo mappings.
+// Expected format (with optional header): source_repo,target_repo
+// Lines starting with # are treated as comments and skipped.
+// If a line has only one column, the target is assumed to be the same as source.
+func ParseRepoListCSV(filePath string) ([]RepoMapping, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read repo list file: %w", err)
+	}
+
+	var mappings []RepoMapping
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+
+	headerSkipped := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Skip header row (first non-empty, non-comment line that looks like a header)
+		if !headerSkipped {
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "source") && strings.Contains(lower, "target") {
+				headerSkipped = true
+				continue
+			}
+			headerSkipped = true
+		}
+
+		parts := strings.SplitN(line, ",", 2)
+		source := strings.TrimSpace(parts[0])
+		if source == "" {
+			continue
+		}
+
+		target := source // default: same name
+		if len(parts) == 2 {
+			t := strings.TrimSpace(parts[1])
+			if t != "" {
+				target = t
+			}
+		}
+
+		mappings = append(mappings, RepoMapping{SourceRepo: source, TargetRepo: target})
+	}
+
+	if len(mappings) == 0 {
+		return nil, fmt.Errorf("no repository mappings found in %s", filePath)
+	}
+
+	return mappings, nil
+}
+
 // WriteOrgMarkdownReport writes a consolidated markdown report for org-level validation.
 func WriteOrgMarkdownReport(summary *OrgValidationSummary, writer io.Writer) {
 	fmt.Fprintln(writer, "# Organization Migration Validation Report")
@@ -1380,19 +1495,20 @@ func WriteOrgMarkdownReport(summary *OrgValidationSummary, writer io.Writer) {
 	// Summary table
 	fmt.Fprintln(writer, "## Summary")
 	fmt.Fprintln(writer)
-	fmt.Fprintln(writer, "| Repository | Status | Pass | Fail | Warn |")
-	fmt.Fprintln(writer, "|------------|--------|------|------|------|")
+	fmt.Fprintln(writer, "| Repository | Status | Pass | Fail | Warn | Info |")
+	fmt.Fprintln(writer, "|------------|--------|------|------|------|------|")
 
-	totalPass, totalFail, totalWarn, totalErrors := 0, 0, 0, 0
+	totalPass, totalFail, totalWarn, totalInfo, totalErrors := 0, 0, 0, 0, 0
 
 	for _, repo := range summary.Repos {
+		repoLabel := orgRepoLabel(repo)
 		if repo.Error != "" {
-			fmt.Fprintf(writer, "| %s | ❌ ERROR | - | - | - |\n", repo.RepoName)
+			fmt.Fprintf(writer, "| %s | ❌ ERROR | - | - | - | - |\n", repoLabel)
 			totalErrors++
 			continue
 		}
 
-		pass, fail, warn := 0, 0, 0
+		pass, fail, warn, info := 0, 0, 0, 0
 		for _, r := range repo.Results {
 			switch r.StatusType {
 			case ValidationStatusPass:
@@ -1401,6 +1517,8 @@ func WriteOrgMarkdownReport(summary *OrgValidationSummary, writer io.Writer) {
 				fail++
 			case ValidationStatusWarn:
 				warn++
+			case ValidationStatusInfo:
+				info++
 			}
 		}
 
@@ -1411,14 +1529,18 @@ func WriteOrgMarkdownReport(summary *OrgValidationSummary, writer io.Writer) {
 			status = ValidationStatusMessageWarn
 		}
 
-		fmt.Fprintf(writer, "| %s | %s | %d | %d | %d |\n", repo.RepoName, status, pass, fail, warn)
+		fmt.Fprintf(writer, "| %s | %s | %d | %d | %d | %d |\n", repoLabel, status, pass, fail, warn, info)
 		totalPass += pass
 		totalFail += fail
 		totalWarn += warn
+		totalInfo += info
 	}
 
 	fmt.Fprintln(writer)
 	fmt.Fprintf(writer, "**Total:** %d passed, %d failed, %d warnings", totalPass, totalFail, totalWarn)
+	if totalInfo > 0 {
+		fmt.Fprintf(writer, ", %d info", totalInfo)
+	}
 	if totalErrors > 0 {
 		fmt.Fprintf(writer, ", %d errors", totalErrors)
 	}
@@ -1427,7 +1549,7 @@ func WriteOrgMarkdownReport(summary *OrgValidationSummary, writer io.Writer) {
 
 	// Per-repo detail sections
 	for _, repo := range summary.Repos {
-		fmt.Fprintf(writer, "---\n\n### %s\n\n", repo.RepoName)
+		fmt.Fprintf(writer, "---\n\n### %s\n\n", orgRepoLabel(repo))
 
 		if repo.Error != "" {
 			fmt.Fprintf(writer, "**Error:** %s\n\n", repo.Error)

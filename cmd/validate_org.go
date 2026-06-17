@@ -20,13 +20,26 @@ import (
 var validateOrgCmd = &cobra.Command{
 	Use:   "validate-org",
 	Short: "Validate all repositories in an organization migration",
-	Long: `Validate all repositories migrated from a source GitHub organization to a target
+	Long: `Validate repositories migrated from a source GitHub organization to a target
 GitHub organization in a single run, producing one consolidated report.
 
+By default, the command lists all repositories in the source organization and
+validates each one against the same-named repository in the target organization.
+This includes forks and archived repos, since GEI migrates them too.
+
+To validate a specific subset of repositories, or when source and target
+repository names differ, provide a CSV file via --repo-list:
+
+  source_repo,target_repo
+  my-app,my-app-migrated
+  shared-lib,shared-lib
+
+If a line has only one column, the target name is assumed to match the source.
+Lines starting with # are comments.
+
 This command:
-- Lists all repositories in the source organization
-- Validates each repository against the matching target repository
-- Produces a single summary table with per-repo pass/fail/warn status
+- Validates each repository pair and produces a consolidated summary table
+- Writes results incrementally so partial progress survives interruptions
 - Optionally writes a consolidated markdown report to a file
 
 Repositories that cannot be accessed or fail validation are recorded with an
@@ -40,6 +53,7 @@ error but do not stop validation of the remaining repositories.`,
 
 		sourceOrganization := viper.GetString("SOURCE_ORGANIZATION")
 		targetOrganization := viper.GetString("TARGET_ORGANIZATION")
+		repoListFile, _ := cmd.Flags().GetString("repo-list")
 
 		// Initialize API with both source and target clients
 		ghAPI, err := api.NewGitHubAPI()
@@ -48,28 +62,54 @@ error but do not stop validation of the remaining repositories.`,
 			os.Exit(1)
 		}
 
-		// List repositories from the source organization
-		spinner, _ := pterm.DefaultSpinner.Start(fmt.Sprintf("Listing repositories in %s...", sourceOrganization))
-		repos, err := ghAPI.ListOrgRepos(api.SourceClient, sourceOrganization)
-		if err != nil {
-			spinner.Fail(fmt.Sprintf("Failed to list repositories: %v", err))
-			os.Exit(1)
-		}
-		spinner.Success(fmt.Sprintf("Found %d repositories in %s", len(repos), sourceOrganization))
+		var mappings []validator.RepoMapping
 
-		if len(repos) == 0 {
-			pterm.Warning.Println("No repositories found in source organization")
+		if repoListFile != "" {
+			// Load explicit repo mappings from CSV
+			mappings, err = validator.ParseRepoListCSV(repoListFile)
+			if err != nil {
+				fmt.Printf("Failed to parse repo list: %v\n", err)
+				os.Exit(1)
+			}
+			pterm.Success.Printf("Loaded %d repository mappings from %s\n", len(mappings), repoListFile)
+		} else {
+			// List all repositories from the source organization
+			spinner, _ := pterm.DefaultSpinner.Start(fmt.Sprintf("Listing repositories in %s...", sourceOrganization))
+			repos, err := ghAPI.ListOrgRepos(api.SourceClient, sourceOrganization)
+			if err != nil {
+				spinner.Fail(fmt.Sprintf("Failed to list repositories: %v", err))
+				os.Exit(1)
+			}
+			spinner.Success(fmt.Sprintf("Found %d repositories in %s", len(repos), sourceOrganization))
+
+			// Default mapping: same name source → target, preserving fork info
+			for _, repo := range repos {
+				mappings = append(mappings, validator.RepoMapping{SourceRepo: repo.Name, TargetRepo: repo.Name, IsFork: repo.IsFork})
+			}
+		}
+
+		if len(mappings) == 0 {
+			pterm.Warning.Println("No repositories to validate")
 			return
+		}
+
+		// Set up incremental markdown writing callback
+		markdownFile := viper.GetString("MARKDOWN_FILE")
+		var onResult func(*validator.OrgValidationSummary)
+		if markdownFile != "" {
+			onResult = func(summary *validator.OrgValidationSummary) {
+				writeOrgMarkdownFile(summary, markdownFile)
+			}
 		}
 
 		// Run org-level validation
 		migrationValidator := validator.New(ghAPI)
-		summary := migrationValidator.ValidateOrganization(sourceOrganization, targetOrganization, repos)
+		summary := migrationValidator.ValidateOrganization(sourceOrganization, targetOrganization, mappings, onResult)
 
 		// Print consolidated results
 		validator.PrintOrgValidationResults(summary)
 
-		// Handle markdown output
+		// Handle markdown output (final write)
 		outputOrgMarkdown(summary)
 
 		if viper.GetBool("STRICT_EXIT") && validator.OrgHasFailures(summary) {
@@ -83,6 +123,7 @@ func init() {
 	validateOrgCmd.Flags().StringP("github-source-org", "s", "", "Source GitHub organization")
 	validateOrgCmd.Flags().StringP("github-source-pat", "a", "", "Source Organization GitHub token")
 	validateOrgCmd.Flags().StringP("source-hostname", "u", "", "GitHub Enterprise source hostname url (optional)")
+	validateOrgCmd.Flags().String("repo-list", "", "Path to CSV file with source,target repository mappings")
 
 	// Bind to Viper in PreRun so they override env vars at execution time
 	validateOrgCmd.PreRun = func(cmd *cobra.Command, args []string) {
@@ -124,10 +165,12 @@ func outputOrgMarkdown(summary *validator.OrgValidationSummary) {
 		pterm.Info.Println("💡 Tip: You can select and copy the entire markdown section above to paste into documentation, issues, or pull requests!")
 	}
 
-	if markdownFile == "" {
-		return
+	if markdownFile != "" {
+		writeOrgMarkdownFile(summary, markdownFile)
 	}
+}
 
+func writeOrgMarkdownFile(summary *validator.OrgValidationSummary, markdownFile string) {
 	if dir := filepath.Dir(markdownFile); dir != "." {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			pterm.Error.Printf("Directory %q does not exist for markdown file\n", dir)
@@ -141,6 +184,4 @@ func outputOrgMarkdown(summary *validator.OrgValidationSummary) {
 		pterm.Error.Printf("Failed to write markdown file %s: %v\n", markdownFile, err)
 		return
 	}
-
-	pterm.Success.Printf("📁 Markdown report saved to %s\n", markdownFile)
 }

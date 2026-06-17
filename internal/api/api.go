@@ -294,6 +294,34 @@ func (api *GitHubAPI) ValidateRepoAccess(clientType ClientType, owner, name stri
 	return nil
 }
 
+// IsRepoFork checks whether a repository is a fork using a lightweight GraphQL query.
+func (api *GitHubAPI) IsRepoFork(clientType ClientType, owner, name string) (bool, error) {
+	ctx := context.Background()
+
+	var query struct {
+		Repository struct {
+			IsFork bool
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	variables := map[string]interface{}{
+		"owner": githubv4.String(owner),
+		"name":  githubv4.String(name),
+	}
+
+	client, clientName, err := api.getGraphQLClient(clientType)
+	if err != nil {
+		return false, fmt.Errorf("failed to get %s client: %w", clientName, err)
+	}
+
+	err = client.client.Query(ctx, &query, variables)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if %s repo %s/%s is a fork: %w", clientName, owner, name, err)
+	}
+
+	return query.Repository.IsFork, nil
+}
+
 // RateLimitInfo contains information about current rate limit status
 type RateLimitInfo struct {
 	Remaining int
@@ -770,8 +798,14 @@ func (api *GitHubAPI) DownloadMigrationArchive(clientType ClientType, org string
 	return outputPath, nil
 }
 
-// ListOrgRepos retrieves all repository names for an organization using GraphQL pagination.
-func (api *GitHubAPI) ListOrgRepos(clientType ClientType, org string) ([]string, error) {
+// OrgRepo holds basic repository info returned by ListOrgRepos.
+type OrgRepo struct {
+	Name   string
+	IsFork bool
+}
+
+// ListOrgRepos retrieves all repositories for an organization using GraphQL pagination.
+func (api *GitHubAPI) ListOrgRepos(clientType ClientType, org string) ([]OrgRepo, error) {
 	ctx := context.Background()
 
 	client, clientName, err := api.getGraphQLClient(clientType)
@@ -783,7 +817,8 @@ func (api *GitHubAPI) ListOrgRepos(clientType ClientType, org string) ([]string,
 		Organization struct {
 			Repositories struct {
 				Nodes []struct {
-					Name string
+					Name   string
+					IsFork bool
 				}
 				PageInfo struct {
 					HasNextPage bool
@@ -798,7 +833,7 @@ func (api *GitHubAPI) ListOrgRepos(clientType ClientType, org string) ([]string,
 		"cursor": (*githubv4.String)(nil),
 	}
 
-	var repos []string
+	var repos []OrgRepo
 	for {
 		err := client.Query(ctx, &query, variables)
 		if err != nil {
@@ -806,7 +841,7 @@ func (api *GitHubAPI) ListOrgRepos(clientType ClientType, org string) ([]string,
 		}
 
 		for _, node := range query.Organization.Repositories.Nodes {
-			repos = append(repos, node.Name)
+			repos = append(repos, OrgRepo{Name: node.Name, IsFork: node.IsFork})
 		}
 
 		if !query.Organization.Repositories.PageInfo.HasNextPage {
