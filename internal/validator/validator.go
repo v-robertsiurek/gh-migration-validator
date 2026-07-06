@@ -63,6 +63,7 @@ type RepositoryData struct {
 	Releases              int
 	CommitCount           int
 	LatestCommitSHA       string
+	LatestCommitParentSHA string
 	BranchProtectionRules int
 	Webhooks              int
 	LFSObjects            int
@@ -77,6 +78,27 @@ type ValidationResult struct {
 	Status     string           // "✅ PASS", "❌ FAIL", "⚠️ WARN" - for display
 	StatusType ValidationStatus // Pass, Fail, Warn - for logic/testing
 	Difference int              // How many items are missing in target (negative if target has more)
+	// DifferenceNote, when set, overrides the auto-generated text in the Difference
+	// column (e.g. an explanation for a warning). Left empty for normal comparisons.
+	DifferenceNote string
+}
+
+// formatDifference returns the text shown in the "Difference" column for a result.
+// A non-empty DifferenceNote always takes precedence over the numeric formatting.
+func formatDifference(result ValidationResult) string {
+	if result.DifferenceNote != "" {
+		return result.DifferenceNote
+	}
+	if result.Difference > 0 {
+		return fmt.Sprintf("Missing: %d", result.Difference)
+	}
+	if result.Difference < 0 {
+		return fmt.Sprintf("Extra: %d", -result.Difference)
+	}
+	if result.Metric == "Latest Commit SHA" {
+		return "N/A"
+	}
+	return "Perfect match"
 }
 
 // HasFailures reports whether any validation result failed so callers can set exit codes accurately.
@@ -661,19 +683,35 @@ func (mv *MigrationValidator) validateRepositoryData(opts ValidationOptions) []V
 	// Compare Latest Commit SHA
 	latestCommitStatus := ValidationStatusMessagePass
 	latestCommitStatusType := ValidationStatusPass
+	latestCommitNote := ""
 
 	if mv.SourceData.LatestCommitSHA != mv.TargetData.LatestCommitSHA {
 		latestCommitStatus = ValidationStatusMessageFail
 		latestCommitStatusType = ValidationStatusFail
+
+		// Azure DevOps: when the source has no LFS objects but the target does, a
+		// `git lfs migrate` step converted files to LFS during migration and rewrote
+		// the tip commit, so the latest SHA legitimately differs. If the parent commit
+		// (last commit - 1) still matches, the history is otherwise consistent, so we
+		// downgrade the mismatch from a hard failure to a warning.
+		if opts.SourceLabel == "Azure DevOps" &&
+			mv.SourceData.LFSObjects == 0 && mv.TargetData.LFSObjects > 0 &&
+			mv.SourceData.LatestCommitParentSHA != "" &&
+			mv.SourceData.LatestCommitParentSHA == mv.TargetData.LatestCommitParentSHA {
+			latestCommitStatus = ValidationStatusMessageWarn
+			latestCommitStatusType = ValidationStatusWarn
+			latestCommitNote = "Tip commit rewritten by git lfs migrate (parent commit matches)"
+		}
 	}
 
 	results = append(results, ValidationResult{
-		Metric:     "Latest Commit SHA",
-		SourceVal:  mv.SourceData.LatestCommitSHA,
-		TargetVal:  mv.TargetData.LatestCommitSHA,
-		Status:     latestCommitStatus,
-		StatusType: latestCommitStatusType,
-		Difference: 0, // Not applicable for SHA comparison
+		Metric:         "Latest Commit SHA",
+		SourceVal:      mv.SourceData.LatestCommitSHA,
+		TargetVal:      mv.TargetData.LatestCommitSHA,
+		Status:         latestCommitStatus,
+		StatusType:     latestCommitStatusType,
+		Difference:     0, // Not applicable for SHA comparison
+		DifferenceNote: latestCommitNote,
 	})
 
 	// Migration archive comparisons (GitHub-to-GitHub migrations only)
@@ -865,6 +903,13 @@ func (mv *MigrationValidator) retrieveTarget(owner, name string, spinner *pterm.
 	} else {
 		mv.TargetData.LatestCommitSHA = latestCommitSHA
 		successfulRequests++
+
+		// Also record the parent of the tip commit. Used to detect a `git lfs migrate`
+		// rewrite (which only changes the tip commit) so the validator can warn instead
+		// of failing when the parent history still matches. Non-fatal on error.
+		if parentSHA, perr := mv.api.GetLatestCommitParentHash(api.TargetClient, owner, name); perr == nil {
+			mv.TargetData.LatestCommitParentSHA = parentSHA
+		}
 	}
 
 	// Get branch protection rules count
@@ -1026,16 +1071,7 @@ func (mv *MigrationValidator) displayValidationTable(title string, results []Val
 	tableData := [][]string{headers}
 
 	for _, result := range results {
-		diffStr := ""
-		if result.Difference > 0 {
-			diffStr = fmt.Sprintf("Missing: %d", result.Difference)
-		} else if result.Difference < 0 {
-			diffStr = fmt.Sprintf("Extra: %d", -result.Difference)
-		} else if result.Metric == "Latest Commit SHA" {
-			diffStr = "N/A"
-		} else {
-			diffStr = "Perfect match"
-		}
+		diffStr := formatDifference(result)
 
 		tableData = append(tableData, []string{
 			result.Metric,
@@ -1139,16 +1175,7 @@ func (mv *MigrationValidator) printMarkdownTable(results []ValidationResult, opt
 	fmt.Fprintln(writer, "|--------|--------|--------------|--------------|------------|")
 
 	for _, result := range results {
-		diffStr := ""
-		if result.Difference > 0 {
-			diffStr = fmt.Sprintf("Missing: %d", result.Difference)
-		} else if result.Difference < 0 {
-			diffStr = fmt.Sprintf("Extra: %d", -result.Difference)
-		} else if result.Metric == "Latest Commit SHA" {
-			diffStr = "N/A"
-		} else {
-			diffStr = "Perfect match"
-		}
+		diffStr := formatDifference(result)
 
 		fmt.Fprintf(writer, "| %s | %s | %v | %v | %s |\n",
 			result.Metric,
