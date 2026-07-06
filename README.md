@@ -567,6 +567,8 @@ export GHMV_ADO_API_VERSION="6.0"     # Optional: auto-detected when omitted
 export GHMV_TARGET_ORGANIZATION="target-org"
 export GHMV_TARGET_TOKEN="ghp_yyy"
 export GHMV_TARGET_REPO="my-repo"     # Required only for single-repo validation
+export GHMV_NO_PRS="true"             # Optional: skip PR validation
+export GHMV_NO_WEBHOOKS="true"        # Optional: skip webhook validation
 gh migration-validator ado
 ```
 
@@ -590,18 +592,21 @@ gh migration-validator ado
 - `--target-hostname` / `-v`: GitHub Enterprise Server URL (optional)
 - `--markdown-table` / `-m`: Output results in markdown format
 - `--markdown-file`: Write markdown output to the specified file
+- `--no-lfs`: Skip LFS object validation
+- `--no-prs`: Skip pull request validation (useful for git-only migrations that don't migrate PRs)
+- `--no-webhooks`: Skip webhook/service hook validation
 - `--strict-exit`: Exit with status 2 on validation failures
 
 ### What Gets Validated (Azure DevOps → GitHub)
 
 | Metric                                             | Status      | Notes                                             |
 | -------------------------------------------------- | ----------- | ------------------------------------------------- |
-| Pull Requests (Total, Active→Open, Completed→Merged, Abandoned→Closed) | ✅ Compared | ADO PR states mapped to GitHub terminology        |
+| Pull Requests (Total, Active→Open, Completed→Merged, Abandoned→Closed) | ✅ Compared | ADO PR states mapped to GitHub terminology; skip with `--no-prs` |
 | Tags                                               | ✅ Compared |                                                   |
 | Commits                                            | ✅ Compared | Default branch only                               |
 | Latest Commit SHA                                  | ✅ Compared | Mismatch caused by `git lfs migrate` downgraded to ⚠️ WARN when the parent commit matches (see notes) |
 | Branch Policies vs Branch Protection Rules         | ℹ️ Advisory | Different concepts — shown for reference only     |
-| Service Hooks                                      | ✅ Compared | Collection-level subscriptions scoped to the repo |
+| Service Hooks                                      | ✅ Compared | Collection-level subscriptions scoped to the repo; skip with `--no-webhooks` |
 | Issues                                             | ⏭️ Skipped  | ADO uses Work Items, not native git issues        |
 | Releases                                           | ⏭️ Skipped  | ADO has no equivalent for git repos               |
 | LFS Objects                                        | ✅ Compared | Counted from .gitattributes patterns; skip with `--no-lfs` |

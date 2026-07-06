@@ -123,6 +123,8 @@ type MigrationValidator struct {
 type ValidationOptions struct {
 	SkipIssues                bool   // BBS has no native issues
 	SkipReleases              bool   // BBS has no releases
+	SkipPRs                   bool   // Skip pull request validation
+	SkipWebhooks              bool   // Skip webhook validation
 	SkipLFS                   bool   // Skip LFS validation
 	SkipMigrationLogOffset    bool   // Don't add +1 for migration log issue
 	SkipMigrationArchive      bool   // Skip migration archive comparisons (non-GitHub sources)
@@ -480,6 +482,18 @@ func (mv *MigrationValidator) ValidateWithOptions(targetOwner, targetRepo string
 	}
 	defer viper.Set("NO_LFS", previousNoLFS)
 
+	previousNoPRs := viper.GetBool("NO_PRS")
+	if opts.SkipPRs {
+		viper.Set("NO_PRS", true)
+	}
+	defer viper.Set("NO_PRS", previousNoPRs)
+
+	previousNoWebhooks := viper.GetBool("NO_WEBHOOKS")
+	if opts.SkipWebhooks {
+		viper.Set("NO_WEBHOOKS", true)
+	}
+	defer viper.Set("NO_WEBHOOKS", previousNoWebhooks)
+
 	// Validate access to target repository before starting
 	fmt.Println("Validating repository access...")
 	if err := mv.api.ValidateRepoAccess(api.TargetClient, targetOwner, targetRepo); err != nil {
@@ -547,44 +561,46 @@ func (mv *MigrationValidator) validateRepositoryData(opts ValidationOptions) []V
 		})
 	}
 
-	// Compare Total PRs
-	prDiff := mv.SourceData.PRs.Total - mv.TargetData.PRs.Total
-	prStatus, prStatusType := getValidationStatus(prDiff)
+	// Compare Total PRs (skip if opts.SkipPRs)
+	if !opts.SkipPRs {
+		prDiff := mv.SourceData.PRs.Total - mv.TargetData.PRs.Total
+		prStatus, prStatusType := getValidationStatus(prDiff)
 
-	results = append(results, ValidationResult{
-		Metric:     "Pull Requests (Total)",
-		SourceVal:  mv.SourceData.PRs.Total,
-		TargetVal:  mv.TargetData.PRs.Total,
-		Status:     prStatus,
-		StatusType: prStatusType,
-		Difference: prDiff,
-	})
+		results = append(results, ValidationResult{
+			Metric:     "Pull Requests (Total)",
+			SourceVal:  mv.SourceData.PRs.Total,
+			TargetVal:  mv.TargetData.PRs.Total,
+			Status:     prStatus,
+			StatusType: prStatusType,
+			Difference: prDiff,
+		})
 
-	// Compare Open PRs
-	openPRDiff := mv.SourceData.PRs.Open - mv.TargetData.PRs.Open
-	openPRStatus, openPRStatusType := getValidationStatus(openPRDiff)
+		// Compare Open PRs
+		openPRDiff := mv.SourceData.PRs.Open - mv.TargetData.PRs.Open
+		openPRStatus, openPRStatusType := getValidationStatus(openPRDiff)
 
-	results = append(results, ValidationResult{
-		Metric:     "Pull Requests (Open)",
-		SourceVal:  mv.SourceData.PRs.Open,
-		TargetVal:  mv.TargetData.PRs.Open,
-		Status:     openPRStatus,
-		StatusType: openPRStatusType,
-		Difference: openPRDiff,
-	})
+		results = append(results, ValidationResult{
+			Metric:     "Pull Requests (Open)",
+			SourceVal:  mv.SourceData.PRs.Open,
+			TargetVal:  mv.TargetData.PRs.Open,
+			Status:     openPRStatus,
+			StatusType: openPRStatusType,
+			Difference: openPRDiff,
+		})
 
-	// Compare Merged PRs
-	mergedPRDiff := mv.SourceData.PRs.Merged - mv.TargetData.PRs.Merged
-	mergedPRStatus, mergedPRStatusType := getValidationStatus(mergedPRDiff)
+		// Compare Merged PRs
+		mergedPRDiff := mv.SourceData.PRs.Merged - mv.TargetData.PRs.Merged
+		mergedPRStatus, mergedPRStatusType := getValidationStatus(mergedPRDiff)
 
-	results = append(results, ValidationResult{
-		Metric:     "Pull Requests (Merged)",
-		SourceVal:  mv.SourceData.PRs.Merged,
-		TargetVal:  mv.TargetData.PRs.Merged,
-		Status:     mergedPRStatus,
-		StatusType: mergedPRStatusType,
-		Difference: mergedPRDiff,
-	})
+		results = append(results, ValidationResult{
+			Metric:     "Pull Requests (Merged)",
+			SourceVal:  mv.SourceData.PRs.Merged,
+			TargetVal:  mv.TargetData.PRs.Merged,
+			Status:     mergedPRStatus,
+			StatusType: mergedPRStatusType,
+			Difference: mergedPRDiff,
+		})
+	}
 
 	// Compare Tags
 	tagDiff := mv.SourceData.Tags - mv.TargetData.Tags
@@ -652,18 +668,20 @@ func (mv *MigrationValidator) validateRepositoryData(opts ValidationOptions) []V
 		})
 	}
 
-	// Compare Webhooks
-	webhooksDiff := mv.SourceData.Webhooks - mv.TargetData.Webhooks
-	webhooksStatus, webhooksStatusType := getValidationStatus(webhooksDiff)
+	// Compare Webhooks (skip if opts.SkipWebhooks)
+	if !opts.SkipWebhooks {
+		webhooksDiff := mv.SourceData.Webhooks - mv.TargetData.Webhooks
+		webhooksStatus, webhooksStatusType := getValidationStatus(webhooksDiff)
 
-	results = append(results, ValidationResult{
-		Metric:     "Webhooks",
-		SourceVal:  mv.SourceData.Webhooks,
-		TargetVal:  mv.TargetData.Webhooks,
-		Status:     webhooksStatus,
-		StatusType: webhooksStatusType,
-		Difference: webhooksDiff,
-	})
+		results = append(results, ValidationResult{
+			Metric:     "Webhooks",
+			SourceVal:  mv.SourceData.Webhooks,
+			TargetVal:  mv.TargetData.Webhooks,
+			Status:     webhooksStatus,
+			StatusType: webhooksStatusType,
+			Difference: webhooksDiff,
+		})
+	}
 
 	// Compare LFS Objects (skip if opts.SkipLFS or NO_LFS flag is set)
 	if !opts.SkipLFS && !viper.GetBool("NO_LFS") {
@@ -845,16 +863,20 @@ func (mv *MigrationValidator) retrieveTarget(owner, name string, spinner *pterm.
 		successfulRequests++
 	}
 
-	// Get PR counts
-	spinner.UpdateText(fmt.Sprintf("Fetching pull requests from %s/%s...", owner, name))
-	prCounts, err := mv.api.GetPRCounts(api.TargetClient, owner, name)
-	if err != nil {
-		failedRequests = append(failedRequests, "pull requests")
-		errorMessages = append(errorMessages, fmt.Sprintf("pull requests: %v", err))
-		mv.TargetData.PRs = &api.PRCounts{Total: 0, Open: 0, Merged: 0, Closed: 0}
+	// Get PR counts (skip if NO_PRS flag is set)
+	if !viper.GetBool("NO_PRS") {
+		spinner.UpdateText(fmt.Sprintf("Fetching pull requests from %s/%s...", owner, name))
+		prCounts, err := mv.api.GetPRCounts(api.TargetClient, owner, name)
+		if err != nil {
+			failedRequests = append(failedRequests, "pull requests")
+			errorMessages = append(errorMessages, fmt.Sprintf("pull requests: %v", err))
+			mv.TargetData.PRs = &api.PRCounts{Total: 0, Open: 0, Merged: 0, Closed: 0}
+		} else {
+			mv.TargetData.PRs = prCounts
+			successfulRequests++
+		}
 	} else {
-		mv.TargetData.PRs = prCounts
-		successfulRequests++
+		mv.TargetData.PRs = &api.PRCounts{Total: 0, Open: 0, Merged: 0, Closed: 0}
 	}
 
 	// Get tag count
@@ -924,16 +946,18 @@ func (mv *MigrationValidator) retrieveTarget(owner, name string, spinner *pterm.
 		successfulRequests++
 	}
 
-	// Get webhook count
-	spinner.UpdateText(fmt.Sprintf("Fetching webhooks from %s/%s...", owner, name))
-	webhooks, err := mv.api.GetWebhookCount(api.TargetClient, owner, name)
-	if err != nil {
-		failedRequests = append(failedRequests, "webhooks")
-		errorMessages = append(errorMessages, fmt.Sprintf("webhooks: %v", err))
-		mv.TargetData.Webhooks = 0
-	} else {
-		mv.TargetData.Webhooks = webhooks
-		successfulRequests++
+	// Get webhook count (skip if NO_WEBHOOKS flag is set)
+	if !viper.GetBool("NO_WEBHOOKS") {
+		spinner.UpdateText(fmt.Sprintf("Fetching webhooks from %s/%s...", owner, name))
+		webhooks, err := mv.api.GetWebhookCount(api.TargetClient, owner, name)
+		if err != nil {
+			failedRequests = append(failedRequests, "webhooks")
+			errorMessages = append(errorMessages, fmt.Sprintf("webhooks: %v", err))
+			mv.TargetData.Webhooks = 0
+		} else {
+			mv.TargetData.Webhooks = webhooks
+			successfulRequests++
+		}
 	}
 
 	// Get LFS object count and validate them (skip if NO_LFS flag is set)

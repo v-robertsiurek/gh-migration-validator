@@ -19,6 +19,7 @@ import (
 	"mona-actions/gh-migration-validator/internal/validator"
 
 	"github.com/pterm/pterm"
+	"github.com/spf13/viper"
 )
 
 // defaultAPIVersion is the Azure DevOps REST API version used as a starting
@@ -305,16 +306,21 @@ func (c *ADOClient) GetRepositoryMetrics(project, repo string, spinner *pterm.Sp
 	successfulRequests++
 	defaultBranch := strings.TrimPrefix(repository.DefaultBranch, "refs/heads/")
 
-	// Get PR counts
-	spinner.UpdateText(fmt.Sprintf("Fetching pull requests from %s/%s...", project, repo))
-	prCounts, err := c.getPRCounts(project, repo)
-	if err != nil {
-		failedRequests = append(failedRequests, "pull requests")
-		errorMessages = append(errorMessages, fmt.Sprintf("pull requests: %v", err))
-		data.PRs = &api.PRCounts{Total: 0, Open: 0, Merged: 0, Closed: 0}
+	// Get PR counts (skip if NO_PRS flag is set)
+	// Get PR counts (skip if NO_PRS flag is set)
+	if !viper.GetBool("NO_PRS") {
+		spinner.UpdateText(fmt.Sprintf("Fetching pull requests from %s/%s...", project, repo))
+		prCounts, err := c.getPRCounts(project, repo)
+		if err != nil {
+			failedRequests = append(failedRequests, "pull requests")
+			errorMessages = append(errorMessages, fmt.Sprintf("pull requests: %v", err))
+			data.PRs = &api.PRCounts{Total: 0, Open: 0, Merged: 0, Closed: 0}
+		} else {
+			data.PRs = prCounts
+			successfulRequests++
+		}
 	} else {
-		data.PRs = prCounts
-		successfulRequests++
+		data.PRs = &api.PRCounts{Total: 0, Open: 0, Merged: 0, Closed: 0}
 	}
 
 	// Get tag count
@@ -376,16 +382,18 @@ func (c *ADOClient) GetRepositoryMetrics(project, repo string, spinner *pterm.Sp
 		successfulRequests++
 	}
 
-	// Get service hook count
-	spinner.UpdateText(fmt.Sprintf("Fetching service hooks from %s/%s...", project, repo))
-	webhooks, err := c.getServiceHookCount(repository.ID)
-	if err != nil {
-		failedRequests = append(failedRequests, "service hooks")
-		errorMessages = append(errorMessages, fmt.Sprintf("service hooks: %v", err))
-		data.Webhooks = 0
-	} else {
-		data.Webhooks = webhooks
-		successfulRequests++
+	// Get service hook count (skip if NO_WEBHOOKS flag is set)
+	if !viper.GetBool("NO_WEBHOOKS") {
+		spinner.UpdateText(fmt.Sprintf("Fetching service hooks from %s/%s...", project, repo))
+		webhooks, err := c.getServiceHookCount(repository.ID)
+		if err != nil {
+			failedRequests = append(failedRequests, "service hooks")
+			errorMessages = append(errorMessages, fmt.Sprintf("service hooks: %v", err))
+			data.Webhooks = 0
+		} else {
+			data.Webhooks = webhooks
+			successfulRequests++
+		}
 	}
 
 	// Get LFS object count (requires default branch). Non-fatal: LFS is optional.

@@ -24,6 +24,8 @@ func adoValidationOptions() validator.ValidationOptions {
 	return validator.ValidationOptions{
 		SkipIssues:                true,
 		SkipReleases:              true,
+		SkipPRs:                   viper.GetBool("NO_PRS"),
+		SkipWebhooks:              viper.GetBool("NO_WEBHOOKS"),
 		SkipMigrationLogOffset:    true,
 		SkipMigrationArchive:      true,
 		BranchPermissionsAdvisory: true,
@@ -89,6 +91,8 @@ Lines starting with # are comments.`,
 		viper.BindPFlag("ADO_REPO", cmd.Flags().Lookup("ado-repo"))
 		viper.BindPFlag("ADO_PAT", cmd.Flags().Lookup("ado-pat"))
 		viper.BindPFlag("ADO_API_VERSION", cmd.Flags().Lookup("ado-api-version"))
+		viper.BindPFlag("NO_PRS", cmd.Flags().Lookup("no-prs"))
+		viper.BindPFlag("NO_WEBHOOKS", cmd.Flags().Lookup("no-webhooks"))
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		// Validate required variables (from either flags OR env vars)
@@ -306,6 +310,8 @@ func init() {
 	adoCmd.Flags().StringP("ado-pat", "k", "", "Azure DevOps personal access token")
 	adoCmd.Flags().String("ado-api-version", "", "Azure DevOps REST API version (default: auto-detected; e.g. 7.1 for cloud, 4.1/5.0 for older TFS/ADO Server)")
 	adoCmd.Flags().String("repo-list", "", "Path to CSV file with source,target repository mappings (project-wide validation only; omit --ado-repo)")
+	adoCmd.Flags().Bool("no-prs", false, "Skip pull request validation (useful for git-only migrations that don't migrate PRs)")
+	adoCmd.Flags().Bool("no-webhooks", false, "Skip webhook/service hook validation")
 }
 
 // checkADOVars validates the configuration for the ado command.
