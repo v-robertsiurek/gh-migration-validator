@@ -295,7 +295,7 @@ func TestADOCommandRegistered(t *testing.T) {
 
 // --- Repo mapping label ---
 
-func TestOrgRepoLabelADO(t *testing.T) {
+func TestRepoMappingLabel(t *testing.T) {
 	tests := []struct {
 		name     string
 		source   string
@@ -318,9 +318,9 @@ func TestOrgRepoLabelADO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			label := orgRepoLabelADO(validator.RepoMapping{SourceRepo: tt.source, TargetRepo: tt.target})
+			label := validator.RepoMapping{SourceRepo: tt.source, TargetRepo: tt.target}.Label()
 			if label != tt.expected {
-				t.Errorf("orgRepoLabelADO() = %q, want %q", label, tt.expected)
+				t.Errorf("RepoMapping.Label() = %q, want %q", label, tt.expected)
 			}
 		})
 	}

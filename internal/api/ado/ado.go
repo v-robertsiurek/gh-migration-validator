@@ -307,7 +307,6 @@ func (c *ADOClient) GetRepositoryMetrics(project, repo string, spinner *pterm.Sp
 	defaultBranch := strings.TrimPrefix(repository.DefaultBranch, "refs/heads/")
 
 	// Get PR counts (skip if NO_PRS flag is set)
-	// Get PR counts (skip if NO_PRS flag is set)
 	if !viper.GetBool("NO_PRS") {
 		spinner.UpdateText(fmt.Sprintf("Fetching pull requests from %s/%s...", project, repo))
 		prCounts, err := c.getPRCounts(project, repo)

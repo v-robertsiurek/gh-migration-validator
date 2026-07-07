@@ -49,7 +49,7 @@ This command compares the following metrics:
 - Branch Policies (advisory comparison with Branch Protection Rules)
 - Service Hooks (compared with GitHub webhooks)
 
-Metrics not available in Azure DevOps (Issues, Releases, LFS) are automatically skipped.
+Metrics not available in Azure DevOps (Issues, Releases) are automatically skipped. LFS objects are compared unless --no-lfs is set.
 
 Validate a single cloud (Azure DevOps Services) repository — omit --ado-server-url:
 
@@ -233,7 +233,7 @@ func runADOProjectValidation(adoClient *ado.ADOClient, ghAPI *api.GitHubAPI, pro
 	markdownFile := viper.GetString("MARKDOWN_FILE")
 
 	for i, mapping := range mappings {
-		pterm.DefaultSection.Printf("[%d/%d] Validating repository: %s\n", i+1, len(mappings), orgRepoLabelADO(mapping))
+		pterm.DefaultSection.Printf("[%d/%d] Validating repository: %s\n", i+1, len(mappings), mapping.Label())
 
 		entry := validator.RepoValidationResult{
 			SourceRepoName: mapping.SourceRepo,
@@ -265,15 +265,6 @@ func runADOProjectValidation(adoClient *ado.ADOClient, ghAPI *api.GitHubAPI, pro
 	if viper.GetBool("STRICT_EXIT") && validator.OrgHasFailures(summary) {
 		os.Exit(2)
 	}
-}
-
-// orgRepoLabelADO returns a display label for a repo mapping, showing source→target
-// when the names differ.
-func orgRepoLabelADO(mapping validator.RepoMapping) string {
-	if mapping.SourceRepo == mapping.TargetRepo {
-		return mapping.SourceRepo
-	}
-	return fmt.Sprintf("%s → %s", mapping.SourceRepo, mapping.TargetRepo)
 }
 
 // validateSingleADORepo fetches ADO metrics for one repo and validates them against

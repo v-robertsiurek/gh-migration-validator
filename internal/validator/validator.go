@@ -1295,6 +1295,15 @@ type RepoMapping struct {
 	IsFork     *bool // nil = unknown (will query API), non-nil = known from ListOrgRepos
 }
 
+// Label returns a display label for the mapping: "source → target" when names
+// differ, otherwise just the repo name.
+func (m RepoMapping) Label() string {
+	if m.SourceRepo != m.TargetRepo {
+		return fmt.Sprintf("%s → %s", m.SourceRepo, m.TargetRepo)
+	}
+	return m.SourceRepo
+}
+
 // RepoValidationResult holds validation results for a single repository in org-level validation.
 type RepoValidationResult struct {
 	SourceRepoName string
@@ -1475,12 +1484,8 @@ func OrgHasFailures(summary *OrgValidationSummary) bool {
 }
 
 // orgRepoLabel returns a display label for a repo in org validation.
-// Shows "source → target" when names differ, otherwise just the repo name.
 func orgRepoLabel(repo RepoValidationResult) string {
-	if repo.SourceRepoName != repo.TargetRepoName {
-		return fmt.Sprintf("%s → %s", repo.SourceRepoName, repo.TargetRepoName)
-	}
-	return repo.SourceRepoName
+	return (RepoMapping{SourceRepo: repo.SourceRepoName, TargetRepo: repo.TargetRepoName}).Label()
 }
 
 // ParseRepoListCSV parses a CSV file with source,target repo mappings.
