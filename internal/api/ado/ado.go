@@ -395,8 +395,8 @@ func (c *ADOClient) GetRepositoryMetrics(project, repo string, spinner *pterm.Sp
 		}
 	}
 
-	// Get LFS object count (requires default branch). Non-fatal: LFS is optional.
-	if defaultBranch != "" {
+	// Get LFS object count (requires default branch; skip if NO_LFS flag is set). Non-fatal: LFS is optional.
+	if defaultBranch != "" && !viper.GetBool("NO_LFS") {
 		spinner.UpdateText(fmt.Sprintf("Fetching LFS objects from %s/%s...", project, repo))
 		lfsCount, err := c.getLFSObjectCount(project, repo, defaultBranch)
 		if err != nil {
